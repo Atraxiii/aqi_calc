@@ -1,13 +1,14 @@
-# ================================================================================
+# ==============================================================================
 # File: 		main.py
 # Author: 		atraxi
 # Created: 		16-January-2026
-# Description: 	The AQI Calculator takes in an excel sheet and returns a csv file 
-# 				containing pollutant values for a day along with pollutant indices
-# ================================================================================
+# Description: 	The AQI Calculator takes in an excel sheet and returns a csv 
+# 				file containing pollutant values for a day along with pollutant
+# 				indices.
+# ==============================================================================
 
 
-# IMPORTS ========================================================================
+# IMPORTS ======================================================================
 from pathlib import Path
 import logging
 
@@ -16,18 +17,18 @@ import numpy as np
 
 from io_handler import input_to_dataframe, dataframe_to_output
 from aqi_standards import AQI_TABLES
-# ================================================================================
+# ==============================================================================
 
 
-# CONFIG AND CONSTANTS ===========================================================
+# CONFIG AND CONSTANTS =========================================================
 logging.basicConfig(
 	level=logging.INFO, 
 	format="%(asctime)s [%(levelname)s] %(message)s"
 )
-# ================================================================================
+# ==============================================================================
 
 
-# DAILY AVERAGE FUNCTIONS ========================================================
+# DAILY AVERAGE FUNCTIONS ======================================================
 def filter_dataframe(df: pd.DataFrame, study_params: list[str]) -> pd.DataFrame:
 	"""Selects relevant study parameters from a dataframe."""
 	return df[study_params]
@@ -35,15 +36,18 @@ def filter_dataframe(df: pd.DataFrame, study_params: list[str]) -> pd.DataFrame:
 def custom_mean(series: pd.Series) -> float:
 	"""Calculates mean of a series only if 75% of data is present."""
 	not_null_percentage = series.notna().mean()
-	return float(np.round(series.mean(), 2)) if not_null_percentage >= 0.75 else np.nan
+	if not_null_percentage >= 0.75:
+		return float(np.round(series.mean(), 2))
+	else:
+		return np.nan
 
 def pollutant_daily_avg(df: pd.DataFrame, pollutants: list[str]) -> pd.DataFrame:
 	"""Groups a dataframe by date and applies the custom mean function."""
 	return df.groupby("Date")[pollutants].agg(custom_mean).reset_index()
-# ================================================================================
+# ==============================================================================
 
 
-# CONVENTIONAL AQI FUNCTIONS ====================================================
+# CONVENTIONAL AQI FUNCTIONS ===================================================
 def pollutant_index_formula(I_hi: float, I_lo: float, BP_hi: float, BP_lo: float, Cp: float) -> int:
 	"""Formula to calculate pollutant index from the pollutant value"""
 	Ip = I_lo + (Cp - BP_lo)*(I_hi - I_lo)/(BP_hi - BP_lo)
@@ -65,7 +69,11 @@ def value_to_index(Cp: float, aqi_bp: list[float], pollutant_bp: list[float]) ->
 	return Ip
 
 def calculate_naqi(series: pd.Series) -> float:
-	"""Calculates NAQI only if more than three pollutants are present and only if either of PM10 or PM2.5 is present."""
+	"""
+	Calculates NAQI only if 
+		1. More than three pollutants are present 
+		2. Either of PM10 or PM2.5 is present.
+	"""
 	if series.count() < 3:
 		return np.nan
 	
@@ -73,15 +81,15 @@ def calculate_naqi(series: pd.Series) -> float:
 		return np.nan
 	
 	return series.max()
-# ================================================================================
+# ==============================================================================
 
 
-# FUZZY AQI FUNCTIONS ============================================================
+# FUZZY AQI FUNCTIONS ==========================================================
 
-# ================================================================================
+# ==============================================================================
 
 
-# STUDIES ========================================================================
+# STUDIES ======================================================================
 def diwali_study() -> None:
 	# Study Specific Settings
 	INPUT_DIR = Path(r"E:\data_hub\Diwali Study (2017 - 2025) Data")
@@ -103,6 +111,9 @@ def diwali_study() -> None:
 		daily_avg_df = pollutant_daily_avg(filtered_df, POLLUTANTS)
 		logging.info("Daily averages calculated.")
 
+		# Adding Day Indices for Plotting Purposes
+		daily_avg_df["STUDY DAY"] = ["$D_{" + str(index - 10) + "}$" for index in range(0, 21)]
+
 		dataframe_to_output(daily_avg_df, OUTPUT_DIR.joinpath(f"{str(year)}.csv"))
 		logging.info("Daily averages saved.")
 
@@ -118,13 +129,10 @@ def diwali_study() -> None:
 		naqi_df["NAQI"] = naqi_df.filter(like="INDEX").apply(calculate_naqi, axis=1)
 		logging.info(f"NAQI calculated.")
 
-		# Adding Day Indices for Plotting Purposes
-		naqi_df["DAY INDEX"] = ["$D_{" + str(index - 10) + "}$" for index in range(0, 21)]
-
 		dataframe_to_output(naqi_df, OUTPUT_DIR.joinpath(f"{str(year)}_NAQI.csv"))
 		logging.info("NAQI INDICES SAVED!")
-# ================================================================================
+# ==============================================================================
 
-# MAIN ===========================================================================
+# MAIN =========================================================================
 if __name__ == "__main__":
 	diwali_study()
