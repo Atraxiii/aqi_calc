@@ -76,7 +76,12 @@ def calculate_naqi(series: pd.Series) -> float:
 # ================================================================================
 
 
-# MAIN FUNCTIONS =================================================================
+# FUZZY AQI FUNCTIONS ============================================================
+
+# ================================================================================
+
+
+# STUDIES ========================================================================
 def diwali_study() -> None:
 	# Study Specific Settings
 	INPUT_DIR = Path(r"E:\data_hub\Diwali Study (2017 - 2025) Data")
@@ -101,7 +106,7 @@ def diwali_study() -> None:
 		dataframe_to_output(daily_avg_df, OUTPUT_DIR.joinpath(f"{str(year)}.csv"))
 		logging.info("Daily averages saved.")
 
-		# Calculate Pollutant Indices and NAQI
+		# Calculate Pollutant Indices
 		naqi_df = daily_avg_df.copy()
 		aqi_bp = NAQI_TABLE["aqi"]
 		for pollutant in POLLUTANTS:
@@ -109,10 +114,14 @@ def diwali_study() -> None:
 			naqi_df[pollutant + " INDEX"] = daily_avg_df[pollutant].apply(lambda x: value_to_index(x, aqi_bp, pollutant_bp))
 			logging.info(f"{pollutant} indices calculated.")
 		
+		# Calculate NAQI
 		naqi_df["NAQI"] = naqi_df.filter(like="INDEX").apply(calculate_naqi, axis=1)
 		logging.info(f"NAQI calculated.")
 
-		dataframe_to_output(daily_avg_df, OUTPUT_DIR.joinpath(f"{str(year)}_NAQI.csv"))
+		# Adding Day Indices for Plotting Purposes
+		naqi_df["DAY INDEX"] = ["$D_{" + str(index - 10) + "}$" for index in range(0, 21)]
+
+		dataframe_to_output(naqi_df, OUTPUT_DIR.joinpath(f"{str(year)}_NAQI.csv"))
 		logging.info("NAQI INDICES SAVED!")
 # ================================================================================
 
