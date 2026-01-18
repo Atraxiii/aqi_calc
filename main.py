@@ -9,12 +9,13 @@
 
 # IMPORTS ========================================================================
 from pathlib import Path
-from typing import Iterator
-from dataclasses import dataclass
 import logging
 
 import pandas as pd
 import numpy as np
+
+from io_handler import input_to_dataframe, dataframe_to_output
+from aqi_standards import AQI_TABLES
 # ================================================================================
 
 
@@ -22,217 +23,97 @@ import numpy as np
 logging.basicConfig(
 	level=logging.INFO, 
 	format="%(asctime)s [%(levelname)s] %(message)s"
-	)
-
-AQI_TABLES = {
-	"naqi": {
-		"category": ["Good", "Satisfactory", "Moderate", "Poor", "Very Poor", "Severe"],
-		"colors": ["#00B050", "#92D050", "#FFFF00", "#FF6500", "#FF0000", "#C00000"],
-		"pollutants" : ["pm10", "pm2.5", "so2", "no2", "co", "ozone", "nh3"],
-		"aqi": [50, 100, 200, 300, 400, 500],
-		"pm10": [24, "$\mu g/m^3$", [50, 100, 250, 350, 430, 510]],
-		"pm2.5": [24, "$\mu g/m^3$", [30, 60, 90, 120, 250, 380]],
-		"so2": [24, "$\mu g/m^3$", [40, 80, 380, 800, 1600, 2400]],
-		"no2": [24, "$\mu g/m^3$", [40, 80, 180, 280, 400, 520]],
-		"co": [8, "$mg/m^3$", [1, 2, 10, 17, 34, 51]],
-		"ozone": [8, "$\mu g/m^3$", [50, 100, 168, 208, 748, 1287]],
-		"nh3": [24, "$\mu g/m^3$", [200, 400, 800, 1200, 1800, 2400]]
-	},
-	"usepa": {
-		"category": ["Good", "Moderate", "Unhealthy for Sensitive Groups", "Unhealthy", "Very Unhealthy", "Hazardous"],
-		"colors": ["#00E400", "#FFFF00", "#FF7E00", "#FF0000", "#8F3F97", "#7E0023"],
-		"pollutants" : ["pm10", "pm2.5", "so2", "no2", "co", "ozone"],
-		"aqi": [50, 100, 150, 200, 300, 500],
-		"pm10": [24, "microgram/m^3", [54, 154, 254, 354, 424, 604]],
-		"pm2.5": [24, "microgram/m^3", [9, 35.4, 55.4, 125.4, 225.4, 325.4]],
-		"so2": [1, "ppb", [35, 75, 185, 304, 604, 1004]],
-		"no2": [1, "ppb", [53, 100, 360, 649, 1249, 2049]],
-		"co": [8, "ppm", [4.4, 9.4, 12.4, 15.4, 30.4, 50.4]],
-		"ozone": [8, "ppb", [50, 100, 168, 208, 748, 1287]]
-	},
-	"caqi": {
-		"category": ["Very Low", "Low", "Medium", "High", "Very High"],
-		"colors": ["#79BC6A", "#BBCF4C", "#EEC20B", "#EFA003", "#E8416F"],
-		"pollutants" : ["no2", "pm10", "ozone", "pm2.5"],
-		"aqi": [25, 50, 75, 100, 125],
-		"no2": [1, "microgram/m^3", [50, 100, 200, 400, 600]],
-		"pm2.5": [24, "microgram/m^3", [25, 50, 90, 180, 270]],
-		"ozone": [8, "microgram/m^3", [60, 120, 180, 240, 300]],
-		"pm10": [24, "microgram/m^3", [15, 30, 55, 110, 165]],
-	},
-	"iaqi": {
-		"category": ["Excellent", "Good", "Lightly Polluted", "Moderately Poluted", "Heavily Polluted", "Severely Polluted"],
-		"colors": ["#00E400", "#FFFF00", "#FF7E00", "#FF0000", "#99004C", "#7E0023"],
-		"pollutants" : ["so2", "no2", "pm10", "co", "ozone", "pm2.5"],
-		"aqi": [50, 100, 150, 200, 300, 500],
-		"so2": [24, "microgram/m^3", [50, 150, 475, 800, 1600, 2620]],
-		"no2": [24, "microgram/m^3", [40, 80, 180, 280, 565, 940]],
-		"pm10": [24, "microgram/m^3", [50, 150, 250, 350, 420, 600]],
-		"co": [24, "miligram/m^3", [2, 4, 14, 24, 36, 60]],
-		"ozone": [1, "microgram/m^3", [160, 200, 300, 400, 800, 1200]],
-		"pm2.5": [24, "microgram/m^3", [35, 75, 115, 150, 250, 500]],
-	}
-}
+)
 # ================================================================================
 
 
-# DATA FUNCTIONS =================================================================
-def load_data(file: Path, header_line_number = 7) -> pd.DataFrame:
-	"""
-	Takes an excel file path and returns a dataframe.
+# DAILY AVERAGE FUNCTIONS ========================================================
+def filter_dataframe(df: pd.DataFrame, study_params: list[str]) -> pd.DataFrame:
+	"""Selects relevant study parameters from a dataframe."""
+	return df[study_params]
 
-	"file" should be a valid file path to an excel sheet.
-	"header_line_number" should be a positive integer.
-	"""
-	df = pd.read_excel(file, skiprows = header_line_number - 1)
-	logging.info(f"Loaded {file} as Dataframe.")
-
-	df = df.rename(columns = {"From Date":"Timestamp"})
-
-	df['Timestamp'] = pd.to_datetime(df['Timestamp'], format='mixed', dayfirst=True)
-	df['Date'] = df['Timestamp'].dt.date
-	df['Time'] = df['Timestamp'].dt.time
-	logging.info("Made required changes to Dataframe.")
-	return df
-
-def conditional_mean(series: pd.Series):
+def custom_mean(series: pd.Series) -> float:
+	"""Calculates mean of a series only if 75% of data is present."""
 	not_null_percentage = series.notna().mean()
-	return np.round(series.mean(), 2) if not_null_percentage >= 0.75 else np.nan
+	return float(np.round(series.mean(), 2)) if not_null_percentage >= 0.75 else np.nan
 
-def calculate_daily_averages(df: pd.DataFrame, pollutants: list[str]) -> pd.DataFrame:
-	return df.groupby("Date")[pollutants].agg(conditional_mean).reset_index()
+def pollutant_daily_avg(df: pd.DataFrame, pollutants: list[str]) -> pd.DataFrame:
+	"""Groups a dataframe by date and applies the custom mean function."""
+	return df.groupby("Date")[pollutants].agg(custom_mean).reset_index()
+# ================================================================================
 
-def excel_to_daily_csv(input_file: Path, output_file: Path, pollutants: list[str], study_params: list[str]) -> pd.DataFrame:
-	df = load_data(input_file)
-	study_df = df[study_params]
-	logging.info("Study params selected successfully.")
-	
-	daily_averages_df = calculate_daily_averages(study_df, pollutants)
-	daily_averages_df.to_csv(output_file, index=False)
-	logging.info(f"Daily averages calculated and saved successfully to {output_file}")
-	return daily_averages_df
 
-def daily_avg_to_naqi():
-	pass
-
+# CONVENTIONAL AQI FUNCTIONS ====================================================
 def pollutant_index_formula(I_hi: float, I_lo: float, BP_hi: float, BP_lo: float, Cp: float) -> int:
-	"""
-	Formula to calculate pollutant index from the pollutant value
-	"""
+	"""Formula to calculate pollutant index from the pollutant value"""
 	Ip = I_lo + (Cp - BP_lo)*(I_hi - I_lo)/(BP_hi - BP_lo)
 	return np.round(Ip, 0)
 
-def value_to_index(value: float, system: str, pollutant: str):
-	pollutant = pollutant.lower()
-	aqi_bp = AQI_TABLES[system]["aqi"]
-	pollutant_bp = AQI_TABLES[system][pollutant][2]
-
-	if np.isnan(value):
+def value_to_index(Cp: float, aqi_bp: list[float], pollutant_bp: list[float]) -> int:
+	"""Captures the range of the pollutant concentration and calculates appropriate pollutant index."""
+	if np.isnan(Cp):
 		return np.nan
 	
-	Ip = None
-	for index in range(len(pollutant_bp) - 1):
-		if value <= pollutant_bp[index]:
-			BP_hi = pollutant_bp[index]
-			I_hi = aqi_bp[index]
-			if index == 0:
-				BP_lo = I_lo = 0
-				Ip = pollutant_index_formula(I_hi, I_lo, BP_hi, BP_lo, value)
-				break
-			BP_lo = pollutant_bp[index - 1]
-			I_lo = aqi_bp[index - 1]
-			Ip = pollutant_index_formula(I_hi, I_lo, BP_hi, BP_lo, value)
+	aqi_hi = pol_hi = 0
+	for value in zip(aqi_bp, pollutant_bp):
+		aqi_lo, pol_lo = aqi_hi, pol_hi
+		aqi_hi, pol_hi = value
+		if Cp <= pol_hi:
 			break
-	
-	if Ip == None:
-		BP_hi = pollutant_bp[-1]
-		BP_lo = pollutant_bp[-2]
-		I_hi = aqi_bp[-1]
-		I_lo = aqi_bp[-2]
-		Ip = pollutant_index_formula(I_hi, I_lo, BP_hi, BP_lo, value)
+
+	Ip: int = pollutant_index_formula(aqi_hi, aqi_lo, pol_hi, pol_lo, Cp)
 	return Ip
 
-def trapmf(x, a, b, c, d):
-	if x <= a:
-		return 0.0
-	elif a < x < b:
-		return (x - a) / (b - a)
-	elif b <= x <= c:
-		return 1.0
-	elif c < x < d:
-		return (d - x) / (d - c)
-	elif d <= x:
-		return 0.0
-
-def fuzzify_pollutant(value, pollutant):
-	"""Convert crisp value to membership vector [Good, Sat, Mod, Poor, VPoor, Severe]"""
-	if pd.isna(value):
-		return [np.nan] * 6
+def calculate_naqi(series: pd.Series) -> float:
+	"""Calculates NAQI only if more than three pollutants are present and only if either of PM10 or PM2.5 is present."""
+	if series.count() < 3:
+		return np.nan
 	
-	traps = {}
-	pollutant_bp = AQI_TABLES["naqi"][pollutant.lower()][2]
-	for i, category in enumerate(AQI_TABLES["naqi"]["category"]):
-		if i == 0:
-			traps[category] = (0, 0, pollutant_bp[i] - 10, pollutant_bp[i] + 10)
-		elif i == len(AQI_TABLES["naqi"]["category"]) - 1:
-			traps[category] = (pollutant_bp[i-1] - 10, pollutant_bp[i-1] + 10, 10000, 10000)
-		elif i > 0:
-			traps[category] = (pollutant_bp[i-1] - 10, pollutant_bp[i-1] + 10, pollutant_bp[i] - 10, pollutant_bp[i] + 10)
-	return [trapmf(value, *params) for params in traps.values()]
+	if series["PM10 INDEX"] == np.nan and series["PM2.5 INDEX"] == np.nan:
+		return np.nan
+	
+	return series.max()
 # ================================================================================
 
 
 # MAIN FUNCTIONS =================================================================
 def diwali_study() -> None:
+	# Study Specific Settings
 	INPUT_DIR = Path(r"E:\data_hub\Diwali Study (2017 - 2025) Data")
 	OUTPUT_DIR = Path(r".\output")
 	POLLUTANTS = ["PM2.5", "PM10", "NO2", "NH3", "SO2", "Ozone"]
 	STUDY_COLS = ["Timestamp", "Date", "Time"] + POLLUTANTS
+	NAQI_TABLE = AQI_TABLES["naqi"]
+
 	for year in range(2017, 2026):
-		df = excel_to_daily_csv(
-			INPUT_DIR.joinpath(f"{str(year)}.xlsx"),
-			OUTPUT_DIR.joinpath(f"{str(year)}.csv"),
-			POLLUTANTS,
-			STUDY_COLS
-			)
+		input_file = INPUT_DIR.joinpath(f"{str(year)}.xlsx")
 
-		# Calculate Pollutant Indices
-		indices_df = daily_avg_to_naqi(df, OUTPUT_DIR)
-		fuzzy_df = df.copy()
-
-		for pollutant in POLLUTANTS:
-			indices_df[pollutant + " INDEX"] = daily_averages_df[pollutant].apply(lambda x: value_to_index(x, "naqi", pollutant))
-
-			fuzzy_cols = [f'{pollutant} {cat}' for cat in AQI_TABLES["naqi"]["category"]]
-			memberships = daily_averages_df[pollutant].apply(lambda x: fuzzify_pollutant(x, pollutant))
-			print(memberships)
-			for i, col in enumerate(fuzzy_cols):
-				fuzzy_df[col] = memberships.apply(lambda m: m[i] if not pd.isna(m[0]) else np.nan)
-		index_cols = [col for col in indices_df.columns if col.endswith(' INDEX')]
-		pm_cols = ['PM2.5 INDEX', 'PM10 INDEX']
-
-		def compute_naqi(row):
-			valid_indices = row[index_cols].dropna()
-			
-			# Check conditions
-			if len(valid_indices) < 3:
-				return np.nan
-			
-			pm_present = any(col in valid_indices.index for col in pm_cols)
-			if not pm_present:
-				return np.nan
-			
-			# Row-wise max of valid indices
-			return valid_indices.max()
-
-		# Apply to create NAQI column
-		indices_df['NAQI'] = indices_df.apply(compute_naqi, axis=1)
+		# Calculate Daily Averages
+		raw_df = input_to_dataframe(input_file)
+		logging.info(f"{input_file} loaded as dataframe")
 		
-		indices_df.to_csv(OUTPUT_DIR.joinpath(f"{str(year)}_naqi_indices.csv"), index=False)
-		logging.info("Pollutant Indices Calculated And Saved Successfully.")
+		filtered_df = filter_dataframe(raw_df, STUDY_COLS)
+		logging.info(f"Dataframe filtered.")
 
-		# Fuzzy AQI
-		fuzzy_df.to_csv(OUTPUT_DIR.joinpath(f"{str(year)}_fnaqi_indices.csv"))
+		daily_avg_df = pollutant_daily_avg(filtered_df, POLLUTANTS)
+		logging.info("Daily averages calculated.")
+
+		dataframe_to_output(daily_avg_df, OUTPUT_DIR.joinpath(f"{str(year)}.csv"))
+		logging.info("Daily averages saved.")
+
+		# Calculate Pollutant Indices and NAQI
+		naqi_df = daily_avg_df.copy()
+		aqi_bp = NAQI_TABLE["aqi"]
+		for pollutant in POLLUTANTS:
+			pollutant_bp = NAQI_TABLE[pollutant.lower()][2]
+			naqi_df[pollutant + " INDEX"] = daily_avg_df[pollutant].apply(lambda x: value_to_index(x, aqi_bp, pollutant_bp))
+			logging.info(f"{pollutant} indices calculated.")
+		
+		naqi_df["NAQI"] = naqi_df.filter(like="INDEX").apply(calculate_naqi, axis=1)
+		logging.info(f"NAQI calculated.")
+
+		dataframe_to_output(daily_avg_df, OUTPUT_DIR.joinpath(f"{str(year)}_NAQI.csv"))
+		logging.info("NAQI INDICES SAVED!")
 # ================================================================================
 
 # MAIN ===========================================================================
