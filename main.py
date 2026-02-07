@@ -16,14 +16,14 @@ import pandas as pd
 import numpy as np
 
 from io_handler import input_to_dataframe, dataframe_to_output
-from aqi_standards import AQI_TABLES
+from aqi_standards import AQI_TABLES, get_naqi_pollutant_mfs
 # ==============================================================================
 
 
 # CONFIG AND CONSTANTS =========================================================
 logging.basicConfig(
 	level=logging.INFO, 
-	format="%(asctime)s [%(levelname)s] %(message)s"
+	format="%(asctime)s [%(levelname)s] %(message)s",
 )
 # ==============================================================================
 
@@ -54,7 +54,10 @@ def pollutant_index_formula(I_hi: float, I_lo: float, BP_hi: float, BP_lo: float
 	return np.round(Ip, 0)
 
 def value_to_index(Cp: float, aqi_bp: list[float], pollutant_bp: list[float]) -> int:
-	"""Captures the range of the pollutant concentration and calculates appropriate pollutant index."""
+	"""
+	1. Captures the range of the pollutant concentration
+	2. Calculates appropriate pollutant index.
+	"""
 	if np.isnan(Cp):
 		return np.nan
 	
@@ -85,7 +88,38 @@ def calculate_naqi(series: pd.Series) -> float:
 
 
 # FUZZY AQI FUNCTIONS ==========================================================
+def trap_mf(x: float, a: float, b: float, c: float, d: float) -> float:
+	"""
+	Calculates the degree of membership [0, 1] using the trapezoidal formula.
+	Supports Z-type (left shoulder) and S-type (right shoulder) naturally.
+	"""
+	# 1. Handle NaN or invalid numerical inputs
+	if x is None or (isinstance(x, float) and x != x): # x != x is a fast NaN check
+		return np.nan
 
+	# 2. Rising Edge (Avoid division by zero if a == b)
+	if a < x < b:
+		return (x - a) / (b - a)
+	
+	# 3. Core Membership (The plateau)
+	if b <= x <= c:
+		return 1.0
+	
+	# 4. Falling Edge (Avoid division by zero if c == d)
+	if c < x < d:
+		return (d - x) / (d - c)
+	
+	# 5. Shoulder Logic
+	# If it's a Z-type (a=b) and we are to the left, it's 100% member (e.g., "Good")
+	if a == b and x <= a:
+		return 1.0
+	
+	# If it's an S-type (c=d) and we are to the right, it's 100% member (e.g., "Severe")
+	if c == d and x >= d:
+		return 1.0
+	
+	# 6. Out of bounds
+	return 0.0
 # ==============================================================================
 
 
@@ -117,7 +151,7 @@ def diwali_study() -> None:
 		dataframe_to_output(daily_avg_df, OUTPUT_DIR.joinpath(f"{str(year)}.csv"))
 		logging.info("Daily averages saved.")
 
-		# Calculate Pollutant Indices
+		# Calculate Naqi Indices
 		naqi_df = daily_avg_df.copy()
 		aqi_bp = NAQI_TABLE["aqi"]
 		for pollutant in POLLUTANTS:
@@ -129,10 +163,25 @@ def diwali_study() -> None:
 		naqi_df["NAQI"] = naqi_df.filter(like="INDEX").apply(calculate_naqi, axis=1)
 		logging.info(f"NAQI calculated.")
 
+		# Save NAQI Dataframe
 		dataframe_to_output(naqi_df, OUTPUT_DIR.joinpath(f"{str(year)}_NAQI.csv"))
 		logging.info("NAQI INDICES SAVED!")
+
+		# Calculate Fuzzy Values
+		fnaqi_df = daily_avg_df.copy()
+		for pollutant in POLLUTANTS:
+			mfs = get_naqi_pollutant_mfs("naqi", pollutant.lower())
+			for cat, params in mfs.items():
+				fnaqi_df[f"{pollutant} {cat}"] = daily_avg_df[pollutant].apply(lambda x: trap_mf(x, *params))
+				logging.info(f"{pollutant} {cat} fuzzy values calculated.")
+		
+		# Save Fuzzy NAQI Dataframe
+		dataframe_to_output(fnaqi_df, OUTPUT_DIR.joinpath(f"{str(year)}_FNAQI.csv"))
+		logging.info("Fuzzy NAQI values saved.")
+	return None
 # ==============================================================================
 
 # MAIN =========================================================================
 if __name__ == "__main__":
 	diwali_study()
+# ==============================================================================

@@ -54,3 +54,48 @@ AQI_TABLES = {
 		"pm2.5": [24, "microgram/m^3", [35, 75, 115, 150, 250, 500]],
 	}
 }
+
+def get_naqi_pollutant_mfs(aqi_system: str, pollutant: str, overlap_pct: float = 0.1) -> dict[str, tuple]:
+	"""
+	Generates trapezoidal membership function coordinates based on proportional overlap.
+	
+	Args:
+		aqi_system: The AQI system name (e.g., "naqi", "usepa", etc.)
+		pollutant: The pollutant name (e.g., "pm2.5", "so2", etc.)
+	"""
+	# Input Validation
+	aqi_system = aqi_system.lower()
+	pollutant = pollutant.lower()
+
+	# Categories and breakpoints for the specified pollutant
+	categories = AQI_TABLES[aqi_system]["category"]
+	breakpoints = AQI_TABLES[aqi_system][pollutant][2]
+	
+	mfs = {}
+	for index, cat in enumerate(categories):
+		# First Category (Z - Type)
+		if index == 0:
+			r_edge = breakpoints[index]
+			mfs[cat] = (0, 0, r_edge * (1 - overlap_pct), r_edge * (1 + overlap_pct))
+			
+		# Intermediate Categories (Trapezoidal)
+		elif index < len(categories) - 1:
+			l_edge = breakpoints[index-1]
+			r_edge = breakpoints[index]
+			mfs[cat] = (
+				l_edge * (1 - overlap_pct), 
+				l_edge * (1 + overlap_pct), 
+				r_edge * (1 - overlap_pct), 
+				r_edge * (1 + overlap_pct)
+			)
+			
+		# Last Category (S - Type)
+		else:
+			l_edge = breakpoints[index-1]
+
+			# Extend max_val to ensure the right shoulder captures all values beyond the last breakpoint
+			max_val = breakpoints[index] * 5 
+
+			# We ignore the mystery 6th value for the "Severe" core and pin it to max_val
+			mfs[cat] = (l_edge * (1 - overlap_pct), l_edge * (1 + overlap_pct), max_val, max_val)
+	return mfs
